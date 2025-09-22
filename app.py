@@ -16,14 +16,18 @@ client = Groq(api_key=groq_api_key)
 # -------------------------
 # GỌI GROQ
 # -------------------------
-def call_groq(prompt, model="llama-3.1-8b-instant", max_tokens=2000):
+def call_groq(prompt, model="llama-3.1-8b-instant", max_tokens=2000, force_json=False):
     try:
-        response = client.chat.completions.create(
-            model=model,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.7,
-            max_tokens=max_tokens,
-        )
+        kwargs = {
+            "model": model,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0.7,
+            "max_tokens": max_tokens,
+        }
+        if force_json:
+            kwargs["response_format"] = {"type": "json_object"}
+
+        response = client.chat.completions.create(**kwargs)
         return response.choices[0].message.content.strip()
     except Exception as e:
         st.error(f"❌ Lỗi GPT/Groq: {str(e)}")
@@ -40,11 +44,17 @@ if uploaded_file:
     story_text = uploaded_file.read().decode("utf-8")
 
     if st.button("🔍 Phân tích & Sinh Prompt"):
+        # -------------------------
+        # Phân tích nhân vật
+        # -------------------------
         with st.spinner("Đang phân tích nhân vật..."):
             profile_prompt = f"""
-            Phân tích văn bản sau và xuất JSON chỉ chứa danh sách nhân vật chính.
+            Phân tích văn bản sau và liệt kê nhân vật chính.
+            Trả về JSON **duy nhất**, không thêm chữ nào khác.
+
             Văn bản:
-            {story_text[:3000]}  # cắt gọn để tránh quá tải
+            {story_text[:3000]}
+
             Định dạng JSON:
             {{
               "characters": [
@@ -56,7 +66,7 @@ if uploaded_file:
             }}
             """
 
-            profile_text = call_groq(profile_prompt, model="llama-3.1-8b-instant")
+            profile_text = call_groq(profile_prompt, model="llama-3.1-8b-instant", force_json=True)
 
             profile_json = {}
             characters = []
@@ -68,12 +78,7 @@ if uploaded_file:
                 except Exception:
                     st.error("⚠️ GPT trả về JSON không hợp lệ cho nhân vật.")
                     st.text(profile_text)
-                    profile_json = {}
                     characters = []
-            else:
-                st.error("❌ Không nhận được profile từ Groq.")
-                profile_json = {}
-                characters = []
 
         # Hiển thị danh sách nhân vật
         if characters:
@@ -81,7 +86,7 @@ if uploaded_file:
             for c in characters:
                 st.write(f"- **{c['name']}**: {c['description']}")
         else:
-            st.warning("⚠️ Không tìm thấy nhân vật nào.")
+            st.warning("⚠️ Không tìm thấy nhân vật, sẽ tiếp tục sinh prompt không có profile.")
 
         # -------------------------
         # Chia đoạn
@@ -100,7 +105,7 @@ if uploaded_file:
             {story_text[:8000]}
             """
 
-            chunks_text = call_groq(split_prompt, model="llama-3.1-8b-instant", max_tokens=4000)
+            chunks_text = call_groq(split_prompt, model="llama-3.1-8b-instant", max_tokens=4000, force_json=True)
 
             chunks = []
             if chunks_text:
@@ -119,10 +124,10 @@ if uploaded_file:
         # -------------------------
         prompts = []
         for ch in chunks:
+            char_context = f"Nhân vật: {characters}" if characters else "Không có nhân vật cụ thể."
             scene_prompt = f"""
             Dựa trên đoạn truyện sau, hãy viết prompt để vẽ ảnh minh họa.
-            Giữ cho nhân vật đồng nhất với mô tả sau:
-            {characters}
+            {char_context}
 
             Đoạn:
             {ch['text']}
@@ -133,7 +138,7 @@ if uploaded_file:
               "prompt": "Mô tả prompt ảnh"
             }}
             """
-            scene_text = call_groq(scene_prompt, model="llama-3.1-8b-instant", max_tokens=1000)
+            scene_text = call_groq(scene_prompt, model="llama-3.1-8b-instant", max_tokens=1000, force_json=True)
             if scene_text:
                 try:
                     scene_json = json.loads(scene_text)
