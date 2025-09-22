@@ -1,104 +1,146 @@
-import streamlit as st
-from groq import Groq
 import os
 import json
+import streamlit as st
+from groq import Groq
 
-# Khởi tạo client Groq
+# 🔑 Lấy API key từ biến môi trường
 client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 
-def call_gpt(prompt, model="llama3-70b-8192", temperature=0.7):
+# ==========================
+# HÀM GỌI GPT/GROQ
+# ==========================
+def call_gpt(prompt, model="llama-3.1-8b-instant", temperature=0.7):
     try:
         response = client.chat.completions.create(
             model=model,
             messages=[{"role": "user", "content": prompt}],
             temperature=temperature,
         )
-        content = response.choices[0].message.content.strip()
-        return content
+        return response.choices[0].message.content.strip()
     except Exception as e:
         st.error(f"Lỗi GPT/Groq: {e}")
         return None
 
-st.title("📖 Story to Prompt Generator (Groq)")
 
-uploaded_file = st.file_uploader("Tải lên file kịch bản (.txt)", type=["txt"])
+# ==========================
+# GIAO DIỆN STREAMLIT
+# ==========================
+st.title("📚 Story to Image Prompt Generator (Groq API)")
 
-if uploaded_file is not None:
+uploaded_file = st.file_uploader("📂 Tải file kịch bản (.txt)", type="txt")
+
+if uploaded_file:
     story_text = uploaded_file.read().decode("utf-8")
 
-    if st.button("Phân tích và sinh prompt"):
-        with st.spinner("Đang phân tích câu chuyện..."):
+    if st.button("🚀 Phân tích và sinh prompt"):
+        st.info("⏳ Đang phân tích nội dung...")
 
-            # -------- BƯỚC 1: Chia đoạn với model nhỏ (llama3-8b) --------
-            split_prompt = f"""
-            Hãy chia nội dung dưới đây thành các đoạn nhỏ hợp lý theo ngữ cảnh.
-            Chỉ cần xuất JSON:
+        # --------------------------
+        # BƯỚC 1: TÓM TẮT NHÂN VẬT
+        # --------------------------
+        profile_prompt = f"""
+        Hãy phân tích đoạn truyện sau và rút ra hồ sơ nhân vật chính:
+        - Tên, giới tính, độ tuổi
+        - Ngoại hình, trang phục, tính cách
+        - Mối quan hệ chính
+        Chỉ trả về JSON hợp lệ theo format sau:
+        {{
+            "characters": [
+                {{
+                    "name": "Tên nhân vật",
+                    "description": "Mô tả chi tiết"
+                }}
+            ]
+        }}
+        Văn bản:
+        {story_text}
+        """
+
+        character_profile = call_gpt(profile_prompt, model="llama-3.1-8b-instant")
+
+        try:
+            characters = json.loads(character_profile)
+        except:
+            st.error("⚠️ GPT trả về JSON không hợp lệ cho nhân vật.")
+            st.stop()
+
+        st.success("✅ Hồ sơ nhân vật đã phân tích xong.")
+
+        # --------------------------
+        # BƯỚC 2: CHIA TRUYỆN THÀNH ĐOẠN
+        # --------------------------
+        split_prompt = f"""
+        Hãy chia câu chuyện sau thành các đoạn ngắn, mỗi đoạn là một cảnh.
+        Trả về JSON hợp lệ:
+        {{
+            "scenes": [
+                {{
+                    "id": 1,
+                    "text": "Nội dung đoạn 1"
+                }},
+                {{
+                    "id": 2,
+                    "text": "Nội dung đoạn 2"
+                }}
+            ]
+        }}
+        Văn bản:
+        {story_text}
+        """
+
+        split_result = call_gpt(split_prompt, model="llama-3.1-8b-instant")
+
+        try:
+            scenes = json.loads(split_result)["scenes"]
+        except:
+            st.error("⚠️ GPT trả về JSON không hợp lệ khi chia đoạn.")
+            st.stop()
+
+        st.success("✅ Đã chia kịch bản thành các đoạn nhỏ.")
+
+        # --------------------------
+        # BƯỚC 3: TẠO PROMPT CHO TỪNG ĐOẠN
+        # --------------------------
+        output_story = []
+        output_prompts = []
+
+        for scene in scenes:
+            prompt_prompt = f"""
+            Hãy viết prompt tạo ảnh cho cảnh dưới đây.
+            Yêu cầu:
+            - Bối cảnh phải logic
+            - Nhân vật đồng nhất với hồ sơ sau: {json.dumps(characters, ensure_ascii=False)}
+            - Trả về đúng JSON:
             {{
-              "segments": [
-                {{"id": 1, "text": "..." }},
-                {{"id": 2, "text": "..." }}
-              ]
+                "id": {scene["id"]},
+                "prompt": "Mô tả chi tiết cho AI vẽ ảnh"
             }}
-
-            Văn bản:
-            {story_text}
+            
+            Cảnh: {scene["text"]}
             """
 
-            split_result = call_gpt(split_prompt, model="llama3-8b-8192")
+            out = call_gpt(prompt_prompt, model="llama-3.1-70b-versatile")
 
-            if not split_result:
-                st.error("❌ Không chia đoạn được.")
-            else:
-                try:
-                    segments = json.loads(split_result)["segments"]
-                except:
-                    st.error("JSON chia đoạn không hợp lệ.")
-                    segments = []
+            try:
+                parsed = json.loads(out)
+                output_story.append(f"{scene['id']}. {scene['text']}")
+                output_prompts.append(f"{parsed['id']}. {parsed['prompt']}")
+            except:
+                st.warning(f"⚠️ JSON không hợp lệ ở đoạn {scene['id']}, bỏ qua.")
 
-                # -------- BƯỚC 2: Sinh prompt cho từng đoạn bằng model mạnh (llama3-70b) --------
-                results = {"segments": []}
-                for seg in segments:
-                    prompt_prompt = f"""
-                    Đây là một đoạn truyện:
-                    {seg['text']}
+        # --------------------------
+        # BƯỚC 4: XUẤT FILE KẾT QUẢ
+        # --------------------------
+        with open("story_scenes.txt", "w", encoding="utf-8") as f:
+            f.write("\n\n".join(output_story))
 
-                    Nhiệm vụ: viết prompt để sinh ảnh minh họa đoạn này.
-                    Yêu cầu:
-                    - Nhân vật đồng nhất với các đoạn khác
-                    - Bối cảnh hợp lý, logic
-                    - Viết prompt ngắn gọn, dễ hiểu
+        with open("story_prompts.txt", "w", encoding="utf-8") as f:
+            f.write("\n\n".join(output_prompts))
 
-                    Xuất JSON:
-                    {{
-                      "id": {seg['id']},
-                      "text": "{seg['text']}",
-                      "prompt": "..."
-                    }}
-                    """
-                    out = call_gpt(prompt_prompt, model="llama3-70b-8192")
-                    try:
-                        obj = json.loads(out)
-                        results["segments"].append(obj)
-                    except:
-                        results["segments"].append({
-                            "id": seg["id"],
-                            "text": seg["text"],
-                            "prompt": out
-                        })
+        st.success("🎉 Hoàn tất! Bạn có thể tải file kết quả bên dưới:")
 
-                st.success("✅ Hoàn tất phân tích và sinh prompt!")
+        st.download_button("⬇️ Tải file đoạn truyện", data="\n\n".join(output_story),
+                           file_name="story_scenes.txt")
 
-                for seg in results["segments"]:
-                    st.subheader(f"Đoạn {seg['id']}")
-                    st.write(seg["text"])
-                    st.code(seg["prompt"], language="markdown")
-
-                # Xuất file JSON
-                json_str = json.dumps(results, ensure_ascii=False, indent=2)
-                st.download_button("⬇️ Tải JSON", data=json_str, file_name="story_segments.json")
-
-                # Xuất file TXT
-                txt_out = ""
-                for seg in results["segments"]:
-                    txt_out += f"Đoạn {seg['id']}:\n{seg['text']}\nPrompt: {seg['prompt']}\n\n"
-                st.download_button("⬇️ Tải TXT", data=txt_out, file_name="story_segments.txt")
+        st.download_button("⬇️ Tải file prompts", data="\n\n".join(output_prompts),
+                           file_name="story_prompts.txt")
