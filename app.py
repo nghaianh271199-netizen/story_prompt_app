@@ -1,28 +1,29 @@
 import streamlit as st
-import openai
+from openai import OpenAI
 import os
 import json
 
-# Lấy API Key từ môi trường (Secrets trên Streamlit Cloud)
-openai.api_key = os.getenv("OPENAI_API_KEY")
+# ---- Setup API ----
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 st.title("📖 Story to Prompt Generator")
 
-uploaded_file = st.file_uploader("Tải lên file .txt chứa kịch bản", type=["txt"])
+uploaded_file = st.file_uploader("📂 Tải lên file .txt chứa kịch bản", type=["txt"])
 
-def call_gpt(prompt):
-    response = openai.ChatCompletion.create(
-        model="gpt-4o-mini",
+# ---- Hàm gọi GPT ----
+def call_gpt(prompt, model="gpt-4o-mini"):
+    response = client.chat.completions.create(
+        model=model,
         messages=[{"role": "user", "content": prompt}]
     )
-    return response["choices"][0]["message"]["content"]
+    return response.choices[0].message.content.strip()
 
 if uploaded_file:
     story_text = uploaded_file.read().decode("utf-8")
     st.subheader("📌 Văn bản gốc:")
     st.text_area("Nội dung", story_text, height=200)
 
-    if st.button("Phân tích & Sinh Prompt"):
+    if st.button("🚀 Phân tích & Sinh Prompt"):
         # B1: Tạo profile nhân vật
         profile_prompt = f"""
         Đọc toàn bộ văn bản sau và trích xuất hồ sơ nhân vật (Character Profile).
@@ -38,15 +39,21 @@ if uploaded_file:
         Văn bản: {story_text}
         """
         scenes = call_gpt(split_prompt)
-        scenes_list = json.loads(scenes)
+
+        try:
+            scenes_list = json.loads(scenes)
+        except:
+            st.error("⚠️ GPT trả về không đúng JSON. Vui lòng thử lại.")
+            st.text(scenes)
+            st.stop()
 
         # B3: Sinh prompt ảnh
         prompts = []
         for scene in scenes_list:
             prompt = f"""
-            Nhân vật: {character_profile}.
+            Nhân vật (giữ đồng nhất): {character_profile}.
             Đoạn truyện: {scene['text']}
-            Viết prompt tiếng Anh để vẽ ảnh, giữ nhân vật đồng nhất.
+            Viết prompt tiếng Anh để vẽ ảnh, giữ nhân vật đồng nhất, bối cảnh logic.
             """
             prompt_out = call_gpt(prompt)
             prompts.append({"scene": scene["scene"], "prompt": prompt_out})
