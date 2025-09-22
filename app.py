@@ -1,15 +1,15 @@
 import streamlit as st
-import openai
+from openai import OpenAI
 import os
 import json
 
-# Lấy API key từ biến môi trường (được set trong Streamlit Secrets)
-openai.api_key = os.getenv("OPENAI_API_KEY")
+# Khởi tạo client (lấy API key từ biến môi trường hoặc secrets)
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 # Hàm gọi GPT và luôn cố gắng trả JSON hợp lệ
 def call_gpt(prompt, model="gpt-4o-mini", temperature=0.7):
     try:
-        response = openai.chat.completions.create(
+        response = client.chat.completions.create(
             model=model,
             messages=[{"role": "user", "content": prompt}],
             temperature=temperature
@@ -25,7 +25,7 @@ def call_gpt(prompt, model="gpt-4o-mini", temperature=0.7):
             Hãy chuyển nó thành JSON đúng cú pháp, chỉ trả về JSON thôi:
             {content}
             """
-            fix_response = openai.chat.completions.create(
+            fix_response = client.chat.completions.create(
                 model=model,
                 messages=[{"role": "user", "content": fix_prompt}],
                 temperature=0
