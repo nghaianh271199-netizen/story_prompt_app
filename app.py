@@ -1,74 +1,87 @@
 import streamlit as st
-from openai import OpenAI
-import os, json, re
+import openai
+import os
+import json
 
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+# Lấy API key từ biến môi trường
+openai.api_key = os.getenv("OPENAI_API_KEY")
 
-st.title("📖 Story → Prompts")
-
-uploaded_file = st.file_uploader("📂 Upload .txt", type=["txt"])
-
-def call_chat(prompt, system="", model="gpt-4o-mini", temperature=0):
-    messages = []
-    if system:
-        messages.append({"role": "system", "content": system})
-    messages.append({"role": "user", "content": prompt})
-    resp = client.chat.completions.create(model=model, messages=messages, temperature=temperature)
-    return resp.choices[0].message.content.strip()
-
-def try_parse_json(raw: str):
+# Hàm gọi GPT và luôn cố gắng trả JSON hợp lệ
+def call_gpt(prompt, model="gpt-4o-mini", temperature=0.7):
     try:
-        return json.loads(raw)
-    except:
-        m = re.search(r"\[.*\]", raw, re.DOTALL)
-        if m:
-            try:
-                return json.loads(m.group(0))
-            except:
-                return None
+        response = openai.chat.completions.create(
+            model=model,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=temperature
+        )
+        content = response.choices[0].message.content.strip()
+
+        # Nếu GPT trả về không phải JSON thì thử "sửa" bằng cách ép chuỗi
+        try:
+            return json.loads(content)
+        except json.JSONDecodeError:
+            fix_prompt = f"""Nội dung sau không phải JSON hợp lệ. 
+            Hãy chuyển nó thành JSON đúng cú pháp, chỉ trả về JSON thôi:
+            {content}"""
+            fix_response = openai.chat.completions.create(
+                model=model,
+                messages=[{"role": "user", "content": fix_prompt}],
+                temperature=0
+            )
+            fixed_content = fix_response.choices[0].message.content.strip()
+            return json.loads(fixed_content)
+
+    except Exception as e:
+        st.error(f"Lỗi GPT: {e}")
         return None
 
-if uploaded_file:
+# Giao diện Streamlit
+st.title("📖 Story to Prompt Generator")
+
+uploaded_file = st.file_uploader("Tải lên file kịch bản (.txt)", type=["txt"])
+
+if uploaded_file is not None:
     story_text = uploaded_file.read().decode("utf-8")
 
-    if st.button("🚀 Chia đoạn & Sinh prompt"):
-        # 1) Profile nhân vật
-        profile = call_chat(
-            f"Phân tích nhân vật chính trong truyện:\n{story_text}",
-            system="Trả về mô tả ngắn gọn về nhân vật và đặc điểm cố định."
-        )
+    if st.button("Phân tích và sinh prompt"):
+        with st.spinner("Đang phân tích câu chuyện..."):
+            split_prompt = f"""
+            Bạn là một trợ lý sáng tạo. 
+            Nhiệm vụ: chia nội dung dưới đây thành các đoạn nhỏ logic theo ngữ cảnh,
+            và tạo prompt để sinh ảnh cho từng đoạn.
+            Yêu cầu:
+            - Các nhân vật phải đồng nhất từ đầu đến cuối.
+            - Bối cảnh hợp lý, không mâu thuẫn.
+            - Xuất JSON dạng:
+            {{
+              "segments": [
+                {{"id": 1, "text": "đoạn truyện", "prompt": "prompt sinh ảnh"}},
+                {{"id": 2, "text": "đoạn truyện", "prompt": "prompt sinh ảnh"}}
+              ]
+            }}
 
-        # 2) Chia đoạn (JSON)
-        split_raw = call_chat(
-            f"Chia văn bản sau thành các cảnh nhỏ, output JSON: "
-            f'[{{"scene":1,"text":"...","summary":"..."}}]\n\n{story_text}',
-            system="Bạn phải trả về JSON hợp lệ, không thêm giải thích."
-        )
-        scenes = try_parse_json(split_raw)
+            Văn bản:
+            {story_text}
+            """
 
-        if not scenes:
-            st.error("⚠ GPT không trả JSON hợp lệ.")
-            st.stop()
+            result = call_gpt(split_prompt)
 
-        # 3) Sinh prompt cho từng đoạn
-        prompts = []
-        for s in scenes:
-            pr = call_chat(
-                f"Profile: {profile}\n\nĐoạn: {s['text']}\n\n"
-                "Viết prompt tiếng Anh để vẽ ảnh, giữ nhân vật đồng nhất."
-            )
-            prompts.append({"scene": s["scene"], "prompt": pr})
+            if result:
+                st.success("✅ Đã phân tích thành công!")
 
-        # 4) Tạo nội dung file
-        story_txt = "\n\n".join([f"[{s['scene']}] {s['text']}" for s in scenes])
-        prompt_txt = "\n\n".join([f"[{p['scene']}] {p['prompt']}" for p in prompts])
+                # Hiển thị kết quả
+                for seg in result.get("segments", []):
+                    st.subheader(f"Đoạn {seg['id']}")
+                    st.write(seg["text"])
+                    st.code(seg["prompt"], language="markdown")
 
-        # 5) Nút tải file
-        st.download_button("⬇️ Tải story_segments.txt", story_txt, "story_segments.txt")
-        st.download_button("⬇️ Tải image_prompts.txt", prompt_txt, "image_prompts.txt")
+                # Xuất file
+                with open("story_segments.json", "w", encoding="utf-8") as f:
+                    json.dump(result, f, ensure_ascii=False, indent=2)
 
-        # Hiển thị preview
-        st.subheader("📖 Đoạn truyện đã chia")
-        st.json(scenes)
-        st.subheader("🎨 Prompt ảnh")
-        st.json(prompts)
+                with open("story_segments.txt", "w", encoding="utf-8") as f:
+                    for seg in result.get("segments", []):
+                        f.write(f"Đoạn {seg['id']}:\n{seg['text']}\nPrompt: {seg['prompt']}\n\n")
+
+                st.download_button("⬇️ Tải JSON", data=json.dumps(result, ensure_ascii=False, indent=2), file_name="story_segments.json")
+                st.download_button("⬇️ Tải TXT", data=open("story_segments.txt", "r", encoding="utf-8").read(), file_name="story_segments.txt")
