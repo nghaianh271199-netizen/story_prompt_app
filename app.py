@@ -1,24 +1,25 @@
 import streamlit as st
-from openai import OpenAI
+from groq import Groq
 import os
 import json
 
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+# Khởi tạo client Groq
+client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 
-def call_gpt(prompt, model="gpt-4o-mini", temperature=0.7):
+def call_gpt(prompt, model="llama3-70b-8192", temperature=0.7):
     try:
         response = client.chat.completions.create(
             model=model,
             messages=[{"role": "user", "content": prompt}],
-            temperature=temperature
+            temperature=temperature,
         )
         content = response.choices[0].message.content.strip()
         return content
     except Exception as e:
-        st.error(f"Lỗi GPT: {e}")
+        st.error(f"Lỗi GPT/Groq: {e}")
         return None
 
-st.title("📖 Story to Prompt Generator")
+st.title("📖 Story to Prompt Generator (Groq)")
 
 uploaded_file = st.file_uploader("Tải lên file kịch bản (.txt)", type=["txt"])
 
@@ -28,7 +29,7 @@ if uploaded_file is not None:
     if st.button("Phân tích và sinh prompt"):
         with st.spinner("Đang phân tích câu chuyện..."):
 
-            # -------- BƯỚC 1: Chia đoạn với GPT-3.5-turbo --------
+            # -------- BƯỚC 1: Chia đoạn với model nhỏ (llama3-8b) --------
             split_prompt = f"""
             Hãy chia nội dung dưới đây thành các đoạn nhỏ hợp lý theo ngữ cảnh.
             Chỉ cần xuất JSON:
@@ -43,7 +44,7 @@ if uploaded_file is not None:
             {story_text}
             """
 
-            split_result = call_gpt(split_prompt, model="gpt-3.5-turbo")
+            split_result = call_gpt(split_prompt, model="llama3-8b-8192")
 
             if not split_result:
                 st.error("❌ Không chia đoạn được.")
@@ -54,7 +55,7 @@ if uploaded_file is not None:
                     st.error("JSON chia đoạn không hợp lệ.")
                     segments = []
 
-                # -------- BƯỚC 2: Sinh prompt cho từng đoạn bằng gpt-4o-mini --------
+                # -------- BƯỚC 2: Sinh prompt cho từng đoạn bằng model mạnh (llama3-70b) --------
                 results = {"segments": []}
                 for seg in segments:
                     prompt_prompt = f"""
@@ -74,7 +75,7 @@ if uploaded_file is not None:
                       "prompt": "..."
                     }}
                     """
-                    out = call_gpt(prompt_prompt, model="gpt-4o-mini")
+                    out = call_gpt(prompt_prompt, model="llama3-70b-8192")
                     try:
                         obj = json.loads(out)
                         results["segments"].append(obj)
@@ -92,10 +93,11 @@ if uploaded_file is not None:
                     st.write(seg["text"])
                     st.code(seg["prompt"], language="markdown")
 
-                # Xuất file
+                # Xuất file JSON
                 json_str = json.dumps(results, ensure_ascii=False, indent=2)
                 st.download_button("⬇️ Tải JSON", data=json_str, file_name="story_segments.json")
 
+                # Xuất file TXT
                 txt_out = ""
                 for seg in results["segments"]:
                     txt_out += f"Đoạn {seg['id']}:\n{seg['text']}\nPrompt: {seg['prompt']}\n\n"
