@@ -3,7 +3,7 @@ import openai
 import os
 import json
 
-# Lấy API key từ biến môi trường
+# Lấy API key từ biến môi trường (được set trong Streamlit Secrets)
 openai.api_key = os.getenv("OPENAI_API_KEY")
 
 # Hàm gọi GPT và luôn cố gắng trả JSON hợp lệ
@@ -16,13 +16,15 @@ def call_gpt(prompt, model="gpt-4o-mini", temperature=0.7):
         )
         content = response.choices[0].message.content.strip()
 
-        # Nếu GPT trả về không phải JSON thì thử "sửa" bằng cách ép chuỗi
+        # Nếu GPT trả về không phải JSON thì thử ép sang JSON hợp lệ
         try:
             return json.loads(content)
         except json.JSONDecodeError:
-            fix_prompt = f"""Nội dung sau không phải JSON hợp lệ. 
+            fix_prompt = f"""
+            Nội dung sau không phải JSON hợp lệ.
             Hãy chuyển nó thành JSON đúng cú pháp, chỉ trả về JSON thôi:
-            {content}"""
+            {content}
+            """
             fix_response = openai.chat.completions.create(
                 model=model,
                 messages=[{"role": "user", "content": fix_prompt}],
@@ -75,13 +77,12 @@ if uploaded_file is not None:
                     st.write(seg["text"])
                     st.code(seg["prompt"], language="markdown")
 
-                # Xuất file
-                with open("story_segments.json", "w", encoding="utf-8") as f:
-                    json.dump(result, f, ensure_ascii=False, indent=2)
+                # Xuất file JSON
+                json_str = json.dumps(result, ensure_ascii=False, indent=2)
+                st.download_button("⬇️ Tải JSON", data=json_str, file_name="story_segments.json")
 
-                with open("story_segments.txt", "w", encoding="utf-8") as f:
-                    for seg in result.get("segments", []):
-                        f.write(f"Đoạn {seg['id']}:\n{seg['text']}\nPrompt: {seg['prompt']}\n\n")
-
-                st.download_button("⬇️ Tải JSON", data=json.dumps(result, ensure_ascii=False, indent=2), file_name="story_segments.json")
-                st.download_button("⬇️ Tải TXT", data=open("story_segments.txt", "r", encoding="utf-8").read(), file_name="story_segments.txt")
+                # Xuất file TXT
+                txt_out = ""
+                for seg in result.get("segments", []):
+                    txt_out += f"Đoạn {seg['id']}:\n{seg['text']}\nPrompt: {seg['prompt']}\n\n"
+                st.download_button("⬇️ Tải TXT", data=txt_out, file_name="story_segments.txt")
