@@ -1,83 +1,68 @@
 import streamlit as st
-from openai import OpenAI
-import re
+import openai
 import os
+import json
 
-# Cấu hình giao diện
-st.set_page_config(page_title="Chia truyện & Sinh Prompt", layout="wide")
-st.title("📖 Chia truyện & Sinh Prompt minh hoạ")
+# Lấy API Key từ môi trường (Secrets trên Streamlit Cloud)
+openai.api_key = os.getenv("OPENAI_API_KEY")
 
-# Lấy API Key từ biến môi trường (khuyến nghị) hoặc nhập trực tiếp
-api_key = os.getenv("OPENAI_API_KEY") or st.text_input("🔑 Nhập API Key OpenAI của bạn", type="password")
+st.title("📖 Story to Prompt Generator")
 
-# Nhập truyện trực tiếp
-story_text = st.text_area("✍ Nhập truyện trực tiếp vào đây", height=400)
+uploaded_file = st.file_uploader("Tải lên file .txt chứa kịch bản", type=["txt"])
 
-if story_text and api_key:
-    client = OpenAI(api_key=api_key)
+def call_gpt(prompt):
+    response = openai.ChatCompletion.create(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": prompt}]
+    )
+    return response["choices"][0]["message"]["content"]
 
-    if st.button("🚀 Xử lý truyện"):
-        with st.spinner("Đang phân tích và tạo prompt..."):
-            # Gọi GPT chia đoạn & sinh prompt
-            response = client.chat.completions.create(
-                model="gpt-4.1",
-                messages=[
-                    {"role": "system", "content": "Bạn là công cụ chia truyện thành các đoạn theo mạch ngữ nghĩa."},
-                    {"role": "user", "content": f"""
-Hãy chia văn bản sau thành các đoạn theo mạch truyện.
-Với mỗi đoạn:
-1. Giữ nguyên văn bản gốc, chỉ cắt đoạn hợp lý.
-2. Tạo prompt minh hoạ cảnh cho đoạn đó.
-Lưu ý:
-- Nhân vật phải đồng nhất từ đầu đến cuối (tên, ngoại hình).
-- Bối cảnh logic theo diễn biến truyện.
-- Xuất kết quả theo dạng:
+if uploaded_file:
+    story_text = uploaded_file.read().decode("utf-8")
+    st.subheader("📌 Văn bản gốc:")
+    st.text_area("Nội dung", story_text, height=200)
 
-[Đoạn 1]
-<Nội dung đoạn>
+    if st.button("Phân tích & Sinh Prompt"):
+        # B1: Tạo profile nhân vật
+        profile_prompt = f"""
+        Đọc toàn bộ văn bản sau và trích xuất hồ sơ nhân vật (Character Profile).
+        Ghi rõ tên, giới tính, trang phục, đặc điểm cố định.
+        Văn bản: {story_text}
+        """
+        character_profile = call_gpt(profile_prompt)
 
-[Prompt 1]
-<Mô tả prompt>
+        # B2: Chia đoạn
+        split_prompt = f"""
+        Dựa trên văn bản sau, hãy chia thành các cảnh nhỏ hợp lý theo ngữ cảnh.
+        Trả về kết quả dạng JSON: [{{"scene": 1, "text": "...", "summary": "..."}}]
+        Văn bản: {story_text}
+        """
+        scenes = call_gpt(split_prompt)
+        scenes_list = json.loads(scenes)
 
-[Đoạn 2]
-<Nội dung đoạn>
+        # B3: Sinh prompt ảnh
+        prompts = []
+        for scene in scenes_list:
+            prompt = f"""
+            Nhân vật: {character_profile}.
+            Đoạn truyện: {scene['text']}
+            Viết prompt tiếng Anh để vẽ ảnh, giữ nhân vật đồng nhất.
+            """
+            prompt_out = call_gpt(prompt)
+            prompts.append({"scene": scene["scene"], "prompt": prompt_out})
 
-[Prompt 2]
-<Mô tả prompt>
-...
+        # Hiển thị kết quả
+        st.subheader("📖 Các đoạn truyện")
+        st.json(scenes_list)
+        st.subheader("🎨 Prompt cho ảnh")
+        st.json(prompts)
 
-Văn bản:
-{story_text}
-"""}
-                ],
-                temperature=0.7
-            )
+        # Xuất file
+        with open("story_segments.txt", "w", encoding="utf-8") as f1, \
+             open("image_prompts.txt", "w", encoding="utf-8") as f2:
+            for scene in scenes_list:
+                f1.write(f"[{scene['scene']}] {scene['text']}\n")
+            for p in prompts:
+                f2.write(f"[{p['scene']}] {p['prompt']}\n")
 
-            result = response.choices[0].message.content
-
-            # Tách đoạn và prompt bằng regex
-            doan_truyen = []
-            prompt_list = []
-
-            matches = re.findall(r"\[Đoạn (\d+)\]\s*(.*?)\s*\[Prompt \1\]\s*(.*?)(?=\n\[|$)", result, re.S)
-            for m in matches:
-                idx, doan, prompt = m
-                doan_truyen.append(f"Đoạn {idx}\n{doan.strip()}\n")
-                prompt_list.append(f"Prompt {idx}\n{prompt.strip()}\n")
-
-            if doan_truyen:
-                doan_text = "\n".join(doan_truyen)
-                prompt_text = "\n".join(prompt_list)
-
-                st.subheader("📑 Kết quả")
-                col1, col2 = st.columns(2)
-                with col1:
-                    st.text_area("Đoạn truyện", doan_text, height=400)
-                with col2:
-                    st.text_area("Prompt", prompt_text, height=400)
-
-                # Nút tải file
-                st.download_button("⬇️ Tải file Đoạn truyện", data=doan_text, file_name="doan_truyen.txt")
-                st.download_button("⬇️ Tải file Prompt", data=prompt_text, file_name="prompt.txt")
-            else:
-                st.error("❌ Không tách được đoạn và prompt. Hãy kiểm tra lại.")
+        st.success("✅ Đã tạo file story_segments.txt và image_prompts.txt")
